@@ -1,0 +1,156 @@
+    setAiLoading(true);
+    setAiAnalysis(null);
+    try {
+      const response = await fetch('/api/analyze-categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kitData: kitPieData })
+      });
+      const data = await response.json();
+      if (data.analysis) {
+        setAiAnalysis(data.analysis);
+      } else {
+        alert('Erro: ' + data.error);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao chamar a IA');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsSyncing(true);
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+        const XLSX = await import('xlsx');
+        const workbook = XLSX.read(data, { type: 'array' });
+        
+        const rawTx: any[] = [];
+        
+        for (const sheetName of workbook.SheetNames) {
+          const sheet = workbook.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+          
+          for (const row of rows) {
+             if (!row || row.length < 2) continue;
+             const dateVal = row[0];
+             if (dateVal === undefined || dateVal === null) continue;
+             
+             const dateStr = String(dateVal).toUpperCase();
+             if (dateStr === 'DATA' || dateStr.includes('TOTAL') || dateStr.includes('RESUMO')) continue;
+             
+             const pacName = String(row[1] || '').trim();
+             if (!pacName) continue;
+             
+             const extraData = row.filter((_, idx) => idx !== 13 && idx !== 14);
+             const ym = parseDateYm(dateVal);
+             
+             if (!ym || ym < '2019-10') continue;
+             
+             rawTx.push({
+               pac: pacName,
+               ym: ym,
+               proc: String(row[3] || '').trim(),
+               cob: typeof row[4] === 'number' ? row[4] : parseCurrency(String(row[4] || '')),
+               cons: typeof row[11] === 'number' ? row[11] : parseCurrency(String(row[11] || '')),
+               liq: typeof row[12] === 'number' ? row[12] : parseCurrency(String(row[12] || '')),
+               pg: String(row[5] || '').trim(),
+               raw: extraData
+             });
+          }
+        }
+
+        // 1. Delete existing patients (transactions will be orphaned but won't be queried)
+        const patsSnap = await getDocs(collection(db, 'patients'));
+        
+        let batch = writeBatch(db);
+        let opCount = 0;
+        
+        for (const p of patsSnap.docs) {
+          batch.delete(p.ref);
+          opCount++;
+          if (opCount >= 400) {
+            await batch.commit();
+            batch = writeBatch(db);
+            opCount = 0;
+          }
+        }
+        if (opCount > 0) {
+          await batch.commit();
+        }
+
+        // Group & save
+        const patientsMap = new Map();
+        for (const tx of rawTx) {
+          if (!tx.pac) continue;
+          if (!patientsMap.has(tx.pac)) {
+            patientsMap.set(tx.pac, {
+              id: tx.pac.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+              name: tx.pac, ltv: 0, liq: 0, cons: 0, n_tx: 0, txs: []
+            });
+          }
+          const p = patientsMap.get(tx.pac);
+          p.ltv += tx.cob || 0;
+          p.liq += tx.liq || 0;
+          p.cons += tx.cons || 0;
+          p.n_tx += 1;
+          tx.kit = inferKit(tx.proc);
+          p.txs.push(tx);
+        }
+
+        batch = writeBatch(db);
+        opCount = 0;
+
+        for (const p of Array.from(patientsMap.values())) {
+          const patientData = { ...p };
+          if (patientData.ltv > 5000) patientData.score = 'A';
+          else if (patientData.ltv > 1000) patientData.score = 'B';
+          else patientData.score = 'C';
+          patientData.status = 'ativo';
+          
+          const kitCount: Record<string, number> = {};
+          for (const tx of patientData.txs) kitCount[tx.kit] = (kitCount[tx.kit] || 0) + 1;
+          patientData.top_kit = Object.keys(kitCount).sort((a,b) => kitCount[b] - kitCount[a])[0] || 'MULTIPLOS';
+          patientData.kits = Object.keys(kitCount);
+          
+          const dts = patientData.txs.map((t: any) => t.ym).filter((d: string) => d).sort();
+          patientData.first_visit = dts[0] || '';
+          patientData.last_visit = dts[dts.length - 1] || '';
+          
+          const pRef = doc(db, 'patients', patientData.id);
+          batch.set(pRef, patientData);
+          opCount++;
+          
+          if (opCount >= 400) {
+             await batch.commit();
+             batch = writeBatch(db);
+             opCount = 0;
+          }
+        }
+        if (opCount > 0) {
+          await batch.commit();
+        }
+        
+        alert('Sincronização com Planilha finalizada com sucesso! (' + rawTx.length + ' registros únicos importados)');
+      } catch (err) {
+        console.error(err);
+        alert('Erro ao sincronizar.');
+      } finally {
+        setIsSyncing(false);
+        if (e.target) e.target.value = ''; // reset input
+      }
+  };
+
+  // Dynamic metric calculations from `patients`, filtering ignoring entries before 2019-10
+  const allAvailableMonths = Array.from(new Set(patients.flatMap(p => (p.txs || []).map(tx => tx.ym).filter(ym => ym && ym >= '2019-10')))).sort();
+
+  const activePatients = patients.map(p => {
+    let validTxs = (p.txs || []).filter(tx => tx.ym && tx.ym >= '2019-10');
+    if (dateFilter) {

@@ -1,0 +1,59 @@
+{
+  "entities": {
+    "Patient": {
+      "title": "Patient",
+      "description": "A patient record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "ltv": { "type": "number" },
+        "liq": { "type": "number" },
+        "cons": { "type": "number" },
+        "n_tx": { "type": "number" },
+        "first_visit": { "type": "string" },
+        "last_visit": { "type": "string" },
+        "top_kit": { "type": "string" },
+        "kits": { "type": "array", "items": { "type": "string" } },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "birth": { "type": "string" },
+        "cpf": { "type": "string" },
+        "address": { "type": "string" },
+        "city": { "type": "string" },
+        "indication": { "type": "string" },
+        "skin_type": { "type": "string" },
+        "allergies": { "type": "string" },
+        "obs": { "type": "string" },
+        "status": { "type": "string" },
+        "score": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A procedure transaction record for a patient",
+      "type": "object",
+      "properties": {
+        "ym": { "type": "string", "description": "Year and month, e.g. 2024-05" },
+        "proc": { "type": "string" },
+        "cob": { "type": "number" },
+        "liq": { "type": "number" },
+        "cons": { "type": "number" },
+        "kit": { "type": "string" },
+        "pg": { "type": "string" }
+      },
+      "required": ["ym", "proc", "cob", "kit"]
+    }
+  },
+  "firestore": {
+    "/patients/{patientId}": {
+      "schema": "Patient",
+      "description": "Stores patient records"
+    },
+    "/patients/{patientId}/transactions/{txId}": {
+      "schema": "Transaction",
+      "description": "Stores transaction records for each patient"
+    }
+  }
+}

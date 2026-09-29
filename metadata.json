@@ -1,0 +1,8 @@
+{
+  "name": "Clínica Dashboard Pro",
+  "description": "Dashboard analítico para clínicas, com filtros avançados, insights com IA e gestão de pacientes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
